@@ -4,7 +4,7 @@ provider "aws" {
 
 locals {
   # 띄워야 할 핵심 마이크로서비스 목록 (필요시 더 추가해!)
-  services = ["ui", "catalog", "cart", "orders", "checkout", "assets"]
+  services = ["ui", "catalog", "cart", "orders", "checkout"]
   vpc_cidr = "10.0.0.0/16"
 }
 

@@ -16,7 +16,7 @@ jobs:
     # 💡 핵심: matrix를 쓰면 아래 배열에 있는 서비스 개수만큼 작업을 동시에 병렬로 실행함!
     strategy:
       matrix:
-        service: [ui, catalog, cart, orders, checkout, assets]
+        service: [ui, catalog, cart, orders, checkout]
 
     steps:
       - name: 1. Checkout Code
