@@ -1,45 +1,74 @@
-name: Build and Push All Services to ECR
+name: Deploy to ECS
 
 on:
   push:
-    branches:
-      - main # main 브랜치에 코드가 푸시되면 자동 실행
-  workflow_dispatch: # GitHub 웹에서 수동으로 버튼 눌러서 실행할 수 있는 옵션 (테스트할 때 꿀기능!)
+    branches: [main]
+    paths-ignore:
+      - "**.tf"
+      - "**.md"
+
+permissions:
+  id-token: write   # OIDC 토큰 발급에 필요
+  contents: read
 
 env:
-  AWS_REGION: ap-northeast-2 # 본인이 Terraform에서 설정한 리전과 동일하게 맞출 것
+  AWS_REGION: "ap-northeast-2"
+  ECR_REPOSITORY: "y-so-cereal-dev"       # ECR 리포지토리 이름
+  ECS_CLUSTER: "y-so-cereal-dev-cluster"  # ECS 클러스터 이름
+  ECS_SERVICE: "y-so-cereal-dev-service"  # ECS 서비스 이름
+  CONTAINER_NAME: "y-so-cereal-dev"       # Task definition 컨테이너 이름
 
 jobs:
-  build-and-push:
+  deploy:
+    name: Build & Deploy
     runs-on: ubuntu-latest
-    
-    # 💡 핵심: matrix를 쓰면 아래 배열에 있는 서비스 개수만큼 작업을 동시에 병렬로 실행함!
-    strategy:
-      matrix:
-        service: [ui, catalog, cart, orders, checkout]
+    environment: production
 
     steps:
-      - name: 1. Checkout Code
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: 2. Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-Deploy
 
-      - name: 3. Login to Amazon ECR
+      - name: Login to Amazon ECR
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
+        uses: aws-actions/amazon-ecr-login@v2
 
-      - name: 4. Build, tag, and push image to Amazon ECR
+      - name: Build, tag, and push image to ECR
+        id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: retail-${{ matrix.service }}
-          IMAGE_TAG: latest # 원래는 ${{ github.sha }} 같은 해시값을 쓰지만, 개판 오분전 전략이므로 latest로 덮어쓰기!
-        # 앱 소스코드가 src/ui, src/catalog 폴더 안에 있다고 가정
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          cd src/${{ matrix.service }}
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ env.ECS_CLUSTER }} \
+            --query taskDefinition \
+            > task-definition.json
+
+      - name: Update ECS task definition with new image
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build-image.outputs.image }}
+
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true  # 배포 완료까지 대기
+          codedeploy-appspec: ""
