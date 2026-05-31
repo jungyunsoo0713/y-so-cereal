@@ -61,7 +61,7 @@ jobs:
 
       - name: Terraform Plan
         id: plan
-        run: terraform plan -no-color -out=tfplan
+        run: terraform plan -no-color -out=tfplan -target=module.vpc -target=module.ecs
         env:
           TF_VAR_github_org: ${{ github.repository_owner }}
           TF_VAR_github_repo: ${{ github.event.repository.name }}
@@ -97,7 +97,7 @@ jobs:
       # main 브랜치 push 시에만 apply
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        run: terraform apply -auto-approve tfplan
+        run: terraform apply -auto-approve -target=module.vpc -target=module.ecs tfplan
         env:
           TF_VAR_github_org: ${{ github.repository_owner }}
           TF_VAR_github_repo: ${{ github.event.repository.name }}
