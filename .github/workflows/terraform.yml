@@ -138,3 +138,4 @@ jobs:
 
       - name: Terraform Apply
         run: terraform apply -auto-approve -target=module.vpc -target=module.ecs tfplan
+
