@@ -58,6 +58,9 @@ jobs:
       - name: Terraform Validate
         id: validate
         run: terraform validate
+        env:
+          TF_VAR_github_org: ${{ github.repository_owner }}
+          TF_VAR_github_repo: ${{ github.event.repository.name }}
 
       - name: Terraform Plan
         id: plan
