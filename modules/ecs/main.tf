@@ -95,6 +95,15 @@ resource "aws_ecs_task_definition" "services" {
         }
       ]
 
+      # SSM Parameter Store에서 환경변수 주입
+      secrets = [
+        for param_name in var.ssm_parameter_arns :
+        {
+          name      = replace(replace(param_name, "/${var.project_name}/${var.environment}/common/", ""), "-", "_")
+          valueFrom = param_name
+        }
+      ]
+
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -104,7 +113,7 @@ resource "aws_ecs_task_definition" "services" {
         }
       }
 
-      readonlyRootFilesystem = false # Java/Node 앱은 tmp 쓰기 필요
+      readonlyRootFilesystem = false
       privileged             = false
       user                   = "1000"
     }

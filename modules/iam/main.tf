@@ -62,20 +62,106 @@ resource "aws_iam_role_policy" "github_actions" {
           "ecr:InitiateLayerUpload",
           "ecr:UploadLayerPart",
           "ecr:CompleteLayerUpload",
-          "ecr:PutImage"
+          "ecr:PutImage",
+          "ecr:DescribeRepositories",
+          "ecr:CreateRepository",
+          "ecr:DeleteRepository",
+          "ecr:PutLifecyclePolicy",
+          "ecr:GetLifecyclePolicy",
+          "ecr:DeleteLifecyclePolicy",
+          "ecr:ListTagsForResource",
+          "ecr:TagResource",
+          "ecr:PutImageScanningConfiguration",
+          "ecr:PutImageTagMutability",
+          "ecr:DescribeImages"
         ]
         Resource = "*"
       },
-      # ECS 배포
+      # ECS 배포 및 읽기
       {
         Effect = "Allow"
         Action = [
           "ecs:DescribeServices",
           "ecs:DescribeTaskDefinition",
           "ecs:DescribeTasks",
+          "ecs:DescribeClusters",
           "ecs:ListTasks",
+          "ecs:ListClusters",
+          "ecs:ListServices",
+          "ecs:ListTaskDefinitions",
           "ecs:RegisterTaskDefinition",
-          "ecs:UpdateService"
+          "ecs:DeregisterTaskDefinition",
+          "ecs:UpdateService",
+          "ecs:CreateCluster",
+          "ecs:DeleteCluster",
+          "ecs:CreateService",
+          "ecs:DeleteService",
+          "ecs:TagResource",
+          "ecs:UntagResource",
+          "ecs:ListTagsForResource",
+          "ecs:PutClusterCapacityProviders"
+        ]
+        Resource = "*"
+      },
+      # EC2 (VPC, Subnet, SG, EIP, NAT, IGW, Route Table 등)
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:Describe*",
+          "ec2:CreateVpc",
+          "ec2:DeleteVpc",
+          "ec2:ModifyVpcAttribute",
+          "ec2:CreateSubnet",
+          "ec2:DeleteSubnet",
+          "ec2:ModifySubnetAttribute",
+          "ec2:CreateInternetGateway",
+          "ec2:DeleteInternetGateway",
+          "ec2:AttachInternetGateway",
+          "ec2:DetachInternetGateway",
+          "ec2:CreateNatGateway",
+          "ec2:DeleteNatGateway",
+          "ec2:AllocateAddress",
+          "ec2:ReleaseAddress",
+          "ec2:AssociateAddress",
+          "ec2:DisassociateAddress",
+          "ec2:CreateRouteTable",
+          "ec2:DeleteRouteTable",
+          "ec2:CreateRoute",
+          "ec2:DeleteRoute",
+          "ec2:AssociateRouteTable",
+          "ec2:DisassociateRouteTable",
+          "ec2:CreateSecurityGroup",
+          "ec2:DeleteSecurityGroup",
+          "ec2:AuthorizeSecurityGroupIngress",
+          "ec2:AuthorizeSecurityGroupEgress",
+          "ec2:RevokeSecurityGroupIngress",
+          "ec2:RevokeSecurityGroupEgress",
+          "ec2:CreateTags",
+          "ec2:DeleteTags"
+        ]
+        Resource = "*"
+      },
+      # ELB (ALB, Target Group, Listener)
+      {
+        Effect = "Allow"
+        Action = [
+          "elasticloadbalancing:*"
+        ]
+        Resource = "*"
+      },
+      # CloudWatch Logs
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:DeleteLogGroup",
+          "logs:DescribeLogGroups",
+          "logs:ListTagsLogGroup",
+          "logs:ListTagsForResource",
+          "logs:TagResource",
+          "logs:UntagResource",
+          "logs:PutRetentionPolicy",
+          "logs:DeleteRetentionPolicy"
         ]
         Resource = "*"
       },
@@ -87,6 +173,19 @@ resource "aws_iam_role_policy" "github_actions" {
           aws_iam_role.ecs_task.arn,
           aws_iam_role.ecs_execution.arn
         ]
+      },
+      # IAM 읽기 (Terraform state refresh용)
+      {
+        Effect = "Allow"
+        Action = [
+          "iam:GetRole",
+          "iam:GetRolePolicy",
+          "iam:GetOpenIDConnectProvider",
+          "iam:ListRolePolicies",
+          "iam:ListAttachedRolePolicies",
+          "iam:ListInstanceProfilesForRole"
+        ]
+        Resource = "*"
       },
       # Terraform S3 backend
       {
@@ -103,16 +202,6 @@ resource "aws_iam_role_policy" "github_actions" {
           "arn:aws:s3:::y-so-cereal-tfstate-ap-northeast-2",
           "arn:aws:s3:::y-so-cereal-tfstate-ap-northeast-2/*"
         ]
-      },
-      # Terraform DynamoDB lock
-      {
-        Effect = "Allow"
-        Action = [
-          "dynamodb:GetItem",
-          "dynamodb:PutItem",
-          "dynamodb:DeleteItem"
-        ]
-        Resource = "arn:aws:dynamodb:*:*:table/terraform-lock"
       }
     ]
   })
@@ -137,6 +226,32 @@ resource "aws_iam_role" "ecs_execution" {
 resource "aws_iam_role_policy_attachment" "ecs_execution" {
   role       = aws_iam_role.ecs_execution.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+# ECS Execution Role에 SSM 읽기 권한 추가 (컨테이너 시작 시 시크릿 주입용)
+resource "aws_iam_role_policy" "ecs_execution_ssm" {
+  name = "${var.project_name}-${var.environment}-ecs-execution-ssm"
+  role = aws_iam_role.ecs_execution.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:GetParametersByPath"
+        ]
+        Resource = "arn:aws:ssm:*:*:parameter/${var.project_name}/${var.environment}/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = "arn:aws:kms:*:*:alias/aws/ssm"
+      }
+    ]
+  })
 }
 
 # ECS Task Role (컨테이너가 AWS 서비스 접근 시 사용)

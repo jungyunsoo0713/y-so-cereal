@@ -77,3 +77,10 @@ variable "github_repo" {
   description = "GitHub repository name"
   type        = string
 }
+
+# SSM Secrets (민감 정보 - terraform.tfvars에서 관리, 절대 커밋 금지)
+variable "app_secrets" {
+  description = "Sensitive app secrets stored in SSM SecureString"
+  type        = map(string)
+  default     = {}
+}
