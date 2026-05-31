@@ -3,9 +3,8 @@ name: Deploy to ECS
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "**.tf"
-      - "**.md"
+    paths:
+      - "src/**"
 
 permissions:
   id-token: write
