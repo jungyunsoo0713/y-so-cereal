@@ -105,43 +105,29 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: terraform apply -auto-approve -target=module.vpc -target=module.ecs tfplan
 
-  # prod는 main push 후 수동 승인 필요 (GitHub Environment protection rules 활용)
-  terraform-prod:
-    name: Terraform - prod
-    runs-on: ubuntu-latest
-    environment: production  # GitHub에서 required reviewers 설정 권장
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: terraform  # dev 성공 후 실행
-
-    defaults:
-      run:
-        working-directory: environments/prod
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: GitHubActions-Terraform-prod
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-
-      - name: Terraform Init
-        run: terraform init
-
-      - name: Terraform Plan
-        run: terraform plan -no-color -out=tfplan -target=module.vpc -target=module.ecs
-        env:
-          TF_VAR_github_org: ${{ github.repository_owner }}
-          TF_VAR_github_repo: ${{ github.event.repository.name }}
-
-      - name: Terraform Apply
-        run: terraform apply -auto-approve -target=module.vpc -target=module.ecs tfplan
+  # prod는 prod 인프라 구축 후 활성화
+  # terraform-prod:
+  #   name: Terraform - prod
+  #   runs-on: ubuntu-latest
+  #   environment: production
+  #   if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+  #   needs: terraform
+  #   defaults:
+  #     run:
+  #       working-directory: environments/prod
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: aws-actions/configure-aws-credentials@v4
+  #       with:
+  #         role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
+  #         aws-region: ${{ env.AWS_REGION }}
+  #     - uses: hashicorp/setup-terraform@v3
+  #       with:
+  #         terraform_version: ${{ env.TF_VERSION }}
+  #     - run: terraform init
+  #     - run: terraform plan -no-color -out=tfplan -target=module.vpc -target=module.ecs
+  #       env:
+  #         TF_VAR_github_org: ${{ github.repository_owner }}
+  #         TF_VAR_github_repo: ${{ github.event.repository.name }}
+  #     - run: terraform apply -auto-approve -target=module.vpc -target=module.ecs tfplan
 
