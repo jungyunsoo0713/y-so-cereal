@@ -68,3 +68,4 @@ EXPOSE 8080
 
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar"]
 # deploy trigger
+# deploy trigger v2
