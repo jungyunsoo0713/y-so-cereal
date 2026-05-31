@@ -125,3 +125,4 @@ jobs:
           service: y-so-cereal-${{ inputs.environment }}-${{ inputs.service }}-service
           cluster: y-so-cereal-${{ inputs.environment }}-cluster
           wait-for-service-stability: true
+          wait-for-minutes: 10
