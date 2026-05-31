@@ -95,15 +95,6 @@ resource "aws_ecs_task_definition" "services" {
         }
       ]
 
-      # SSM Parameter Store에서 환경변수 주입
-      secrets = [
-        for param_name in var.ssm_parameter_arns :
-        {
-          name      = replace(replace(param_name, "/${var.project_name}/${var.environment}/common/", ""), "-", "_")
-          valueFrom = param_name
-        }
-      ]
-
       logConfiguration = {
         logDriver = "awslogs"
         options = {

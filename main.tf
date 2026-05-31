@@ -9,20 +9,6 @@ module "vpc" {
   private_subnet_cidrs = var.private_subnet_cidrs
 }
 
-module "ssm" {
-  source = "./modules/ssm"
-
-  project_name = var.project_name
-  environment  = var.environment
-
-  app_parameters = {
-    "common/APP_ENV"    = var.environment
-    "common/AWS_REGION" = var.aws_region
-  }
-
-  app_secrets = var.app_secrets
-}
-
 module "iam" {
   source = "./modules/iam"
 
@@ -48,5 +34,4 @@ module "ecs" {
   task_role_arn      = module.iam.ecs_task_role_arn
   execution_role_arn = module.iam.ecs_execution_role_arn
   services           = ["cart", "catalog", "checkout", "orders", "ui"]
-  ssm_parameter_arns = values(module.ssm.parameter_arns)
 }

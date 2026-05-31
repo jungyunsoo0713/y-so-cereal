@@ -59,9 +59,3 @@ variable "services" {
   type        = list(string)
   default     = ["cart", "catalog", "checkout", "orders", "ui"]
 }
-
-variable "ssm_parameter_arns" {
-  description = "List of SSM parameter ARNs to inject into containers as environment variables"
-  type        = list(string)
-  default     = []
-}
