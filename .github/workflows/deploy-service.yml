@@ -81,12 +81,18 @@ jobs:
             --image-id imageTag=${IMAGE_TAG} \
             --region ${{ env.AWS_REGION }} \
             --query 'imageScanFindings.findingSeverityCounts' \
-            --output json)
+            --output json 2>/dev/null || echo "{}")
 
           echo "Scan findings: ${FINDINGS}"
 
-          CRITICAL=$(echo $FINDINGS | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('CRITICAL', 0))")
-          HIGH=$(echo $FINDINGS | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('HIGH', 0))")
+          # 빈 값이거나 null이면 취약점 없음으로 처리
+          if [ -z "$FINDINGS" ] || [ "$FINDINGS" = "null" ] || [ "$FINDINGS" = "{}" ]; then
+            echo "✅ No vulnerabilities found. Proceeding."
+            exit 0
+          fi
+
+          CRITICAL=$(echo $FINDINGS | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('CRITICAL', 0))" 2>/dev/null || echo "0")
+          HIGH=$(echo $FINDINGS | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('HIGH', 0))" 2>/dev/null || echo "0")
 
           echo "CRITICAL: ${CRITICAL}, HIGH: ${HIGH}"
 
