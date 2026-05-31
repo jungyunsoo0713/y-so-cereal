@@ -1,9 +1,9 @@
 terraform {
   backend "s3" {
-    bucket         = "your-tfstate-bucket-name"   # 실제 버킷 이름으로 변경
-    key            = "terraform.tfstate"
-    region         = "ap-northeast-2"
-    encrypt        = true
-    dynamodb_table = "terraform-lock"             # DynamoDB 락 테이블
+    bucket       = "y-so-cereal-tfstate-ap-northeast-2" # Step 1에서 만든 버킷 이름
+    key          = "terraform.tfstate"
+    region       = "ap-northeast-2"
+    encrypt      = true
+    use_lockfile = true # dynamodb_table 대신 S3 네이티브 락 사용 (AWS provider 6.x)
   }
 }
