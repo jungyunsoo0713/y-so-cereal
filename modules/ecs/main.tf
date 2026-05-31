@@ -1,10 +1,16 @@
-# ECR Repository
-resource "aws_ecr_repository" "main" {
-  name                 = "${var.project_name}-${var.environment}"
+locals {
+  services = toset(var.services)
+}
+
+# ECR Repository - 서비스별
+resource "aws_ecr_repository" "services" {
+  for_each = local.services
+
+  name                 = "${var.project_name}-${var.environment}-${each.key}"
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
-    scan_on_push = true  # 이미지 푸시 시 자동 취약점 스캔
+    scan_on_push = true
   }
 
   encryption_configuration {
@@ -12,13 +18,15 @@ resource "aws_ecr_repository" "main" {
   }
 
   tags = {
-    Name = "${var.project_name}-${var.environment}-ecr"
+    Name = "${var.project_name}-${var.environment}-${each.key}-ecr"
   }
 }
 
-# ECR Lifecycle Policy (이미지 보관 정책)
-resource "aws_ecr_lifecycle_policy" "main" {
-  repository = aws_ecr_repository.main.name
+# ECR Lifecycle Policy - 서비스별
+resource "aws_ecr_lifecycle_policy" "services" {
+  for_each = local.services
+
+  repository = aws_ecr_repository.services[each.key].name
 
   policy = jsonencode({
     rules = [
@@ -36,17 +44,19 @@ resource "aws_ecr_lifecycle_policy" "main" {
   })
 }
 
-# CloudWatch Log Group
-resource "aws_cloudwatch_log_group" "ecs" {
-  name              = "/ecs/${var.project_name}-${var.environment}"
+# CloudWatch Log Group - 서비스별
+resource "aws_cloudwatch_log_group" "services" {
+  for_each = local.services
+
+  name              = "/ecs/${var.project_name}-${var.environment}-${each.key}"
   retention_in_days = 30
 
   tags = {
-    Name = "${var.project_name}-${var.environment}-logs"
+    Name = "${var.project_name}-${var.environment}-${each.key}-logs"
   }
 }
 
-# ECS Cluster
+# ECS Cluster (공유)
 resource "aws_ecs_cluster" "main" {
   name = "${var.project_name}-${var.environment}-cluster"
 
@@ -60,9 +70,11 @@ resource "aws_ecs_cluster" "main" {
   }
 }
 
-# ECS Task Definition
-resource "aws_ecs_task_definition" "main" {
-  family                   = "${var.project_name}-${var.environment}"
+# ECS Task Definition - 서비스별
+resource "aws_ecs_task_definition" "services" {
+  for_each = local.services
+
+  family                   = "${var.project_name}-${var.environment}-${each.key}"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   cpu                      = var.container_cpu
@@ -72,8 +84,8 @@ resource "aws_ecs_task_definition" "main" {
 
   container_definitions = jsonencode([
     {
-      name      = "${var.project_name}-${var.environment}"
-      image     = var.container_image
+      name      = "${var.project_name}-${var.environment}-${each.key}"
+      image     = "${aws_ecr_repository.services[each.key].repository_url}:latest"
       essential = true
 
       portMappings = [
@@ -86,27 +98,24 @@ resource "aws_ecs_task_definition" "main" {
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          "awslogs-group"         = aws_cloudwatch_log_group.ecs.name
+          "awslogs-group"         = aws_cloudwatch_log_group.services[each.key].name
           "awslogs-region"        = var.aws_region
           "awslogs-stream-prefix" = "ecs"
         }
       }
 
-      # 읽기 전용 루트 파일시스템 (보안 강화)
-      readonlyRootFilesystem = true
-
-      # 권한 상승 방지
+      readonlyRootFilesystem = false # Java/Node 앱은 tmp 쓰기 필요
       privileged             = false
       user                   = "1000"
     }
   ])
 
   tags = {
-    Name = "${var.project_name}-${var.environment}-task"
+    Name = "${var.project_name}-${var.environment}-${each.key}-task"
   }
 }
 
-# Security Group - ALB
+# Security Group - ALB (공유)
 resource "aws_security_group" "alb" {
   name        = "${var.project_name}-${var.environment}-alb-sg"
   description = "Security group for ALB"
@@ -138,17 +147,17 @@ resource "aws_security_group" "alb" {
   }
 }
 
-# Security Group - ECS Tasks
+# Security Group - ECS Tasks (공유)
 resource "aws_security_group" "ecs_tasks" {
   name        = "${var.project_name}-${var.environment}-ecs-sg"
-  description = "Security group for ECS tasks - only allow traffic from ALB"
+  description = "Allow traffic from ALB only"
   vpc_id      = var.vpc_id
 
   ingress {
     from_port       = var.container_port
     to_port         = var.container_port
     protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]  # ALB에서만 인바운드 허용
+    security_groups = [aws_security_group.alb.id]
   }
 
   egress {
@@ -163,7 +172,7 @@ resource "aws_security_group" "ecs_tasks" {
   }
 }
 
-# Application Load Balancer
+# ALB (공유 - ui 서비스가 진입점)
 resource "aws_lb" "main" {
   name               = "${var.project_name}-${var.environment}-alb"
   internal           = false
@@ -178,8 +187,11 @@ resource "aws_lb" "main" {
   }
 }
 
-resource "aws_lb_target_group" "main" {
-  name        = "${var.project_name}-${var.environment}-tg"
+# Target Group - 서비스별
+resource "aws_lb_target_group" "services" {
+  for_each = local.services
+
+  name        = "${var.project_name}-${var.environment}-${each.key}-tg"
   port        = var.container_port
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
@@ -191,49 +203,77 @@ resource "aws_lb_target_group" "main" {
     unhealthy_threshold = 3
     timeout             = 5
     interval            = 30
-    path                = "/health"
-    matcher             = "200"
+    path                = "/actuator/health"
+    matcher             = "200-404" # 서비스마다 health endpoint 다를 수 있어서 넓게 허용
   }
 
   tags = {
-    Name = "${var.project_name}-${var.environment}-tg"
+    Name = "${var.project_name}-${var.environment}-${each.key}-tg"
   }
 }
 
+# ALB Listener - HTTP (ui가 기본, 나머지는 path 기반 라우팅)
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.main.arn
   port              = 80
   protocol          = "HTTP"
 
+  # 기본은 ui로 포워딩
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.main.arn
+    target_group_arn = aws_lb_target_group.services["ui"].arn
   }
 }
 
-# ECS Service
-resource "aws_ecs_service" "main" {
-  name            = "${var.project_name}-${var.environment}-service"
+# ALB Listener Rules - 서비스별 path 기반 라우팅
+resource "aws_lb_listener_rule" "services" {
+  for_each = {
+    cart     = "/cart*"
+    catalog  = "/catalog*"
+    checkout = "/checkout*"
+    orders   = "/orders*"
+  }
+
+  listener_arn = aws_lb_listener.http.arn
+  priority     = index(["cart", "catalog", "checkout", "orders"], each.key) + 10
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.services[each.key].arn
+  }
+
+  condition {
+    path_pattern {
+      values = [each.value]
+    }
+  }
+}
+
+# ECS Service - 서비스별
+resource "aws_ecs_service" "services" {
+  for_each = local.services
+
+  name            = "${var.project_name}-${var.environment}-${each.key}-service"
   cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.main.arn
+  task_definition = aws_ecs_task_definition.services[each.key].arn
   desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = var.private_subnets  # private subnet에 배포
+    subnets          = var.private_subnets
     security_groups  = [aws_security_group.ecs_tasks.id]
     assign_public_ip = false
   }
 
   load_balancer {
-    target_group_arn = aws_lb_target_group.main.arn
-    container_name   = "${var.project_name}-${var.environment}"
+    target_group_arn = aws_lb_target_group.services[each.key].arn
+    container_name   = "${var.project_name}-${var.environment}-${each.key}"
     container_port   = var.container_port
   }
 
   deployment_circuit_breaker {
     enable   = true
-    rollback = true  # 배포 실패 시 자동 롤백
+    rollback = true
   }
 
   deployment_controller {
@@ -243,10 +283,10 @@ resource "aws_ecs_service" "main" {
   depends_on = [aws_lb_listener.http]
 
   tags = {
-    Name = "${var.project_name}-${var.environment}-service"
+    Name = "${var.project_name}-${var.environment}-${each.key}-service"
   }
 
   lifecycle {
-    ignore_changes = [task_definition]  # GitHub Actions가 task definition 업데이트
+    ignore_changes = [task_definition] # GitHub Actions가 업데이트
   }
 }

@@ -8,67 +8,130 @@ on:
       - "**.md"
 
 permissions:
-  id-token: write   # OIDC 토큰 발급에 필요
+  id-token: write
   contents: read
 
 env:
   AWS_REGION: "ap-northeast-2"
-  ECR_REPOSITORY: "y-so-cereal-dev"       # ECR 리포지토리 이름
-  ECS_CLUSTER: "y-so-cereal-dev-cluster"  # ECS 클러스터 이름
-  ECS_SERVICE: "y-so-cereal-dev-service"  # ECS 서비스 이름
-  CONTAINER_NAME: "y-so-cereal-dev"       # Task definition 컨테이너 이름
+  ECS_CLUSTER: "y-so-cereal-dev-cluster"
 
 jobs:
-  deploy:
-    name: Build & Deploy
+  changes:
+    name: Detect changed services
     runs-on: ubuntu-latest
+    outputs:
+      cart:     ${{ steps.filter.outputs.cart }}
+      catalog:  ${{ steps.filter.outputs.catalog }}
+      checkout: ${{ steps.filter.outputs.checkout }}
+      orders:   ${{ steps.filter.outputs.orders }}
+      ui:       ${{ steps.filter.outputs.ui }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            cart:
+              - 'src/cart/**'
+            catalog:
+              - 'src/catalog/**'
+            checkout:
+              - 'src/checkout/**'
+            orders:
+              - 'src/orders/**'
+            ui:
+              - 'src/ui/**'
+
+  deploy:
+    name: Build & Deploy - ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: changes
     environment: production
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: cart
+            enabled: ${{ needs.changes.outputs.cart == 'true' }}
+          - service: catalog
+            enabled: ${{ needs.changes.outputs.catalog == 'true' }}
+          - service: checkout
+            enabled: ${{ needs.changes.outputs.checkout == 'true' }}
+          - service: orders
+            enabled: ${{ needs.changes.outputs.orders == 'true' }}
+          - service: ui
+            enabled: ${{ needs.changes.outputs.ui == 'true' }}
+
+    if: |
+      needs.changes.outputs.cart == 'true' ||
+      needs.changes.outputs.catalog == 'true' ||
+      needs.changes.outputs.checkout == 'true' ||
+      needs.changes.outputs.orders == 'true' ||
+      needs.changes.outputs.ui == 'true'
+
     steps:
+      - name: Skip if service not changed
+        if: matrix.enabled != 'true'
+        run: echo "No changes in ${{ matrix.service }}, skipping."
+
       - name: Checkout
+        if: matrix.enabled == 'true'
         uses: actions/checkout@v4
 
       - name: Configure AWS credentials via OIDC
+        if: matrix.enabled == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: GitHubActions-Deploy
+          role-session-name: GitHubActions-Deploy-${{ matrix.service }}
 
       - name: Login to Amazon ECR
+        if: matrix.enabled == 'true'
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build, tag, and push image to ECR
+        if: matrix.enabled == 'true'
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
+          SERVICE: ${{ matrix.service }}
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          docker build \
+            -t $ECR_REGISTRY/y-so-cereal-dev-${SERVICE}:${IMAGE_TAG} \
+            -t $ECR_REGISTRY/y-so-cereal-dev-${SERVICE}:latest \
+            src/${SERVICE}
+          docker push $ECR_REGISTRY/y-so-cereal-dev-${SERVICE}:${IMAGE_TAG}
+          docker push $ECR_REGISTRY/y-so-cereal-dev-${SERVICE}:latest
+          echo "image=$ECR_REGISTRY/y-so-cereal-dev-${SERVICE}:${IMAGE_TAG}" >> $GITHUB_OUTPUT
 
       - name: Download current task definition
+        if: matrix.enabled == 'true'
+        env:
+          SERVICE: ${{ matrix.service }}
         run: |
           aws ecs describe-task-definition \
-            --task-definition ${{ env.ECS_CLUSTER }} \
+            --task-definition y-so-cereal-dev-${SERVICE} \
             --query taskDefinition \
             > task-definition.json
 
       - name: Update ECS task definition with new image
+        if: matrix.enabled == 'true'
         id: task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: task-definition.json
-          container-name: ${{ env.CONTAINER_NAME }}
+          container-name: y-so-cereal-dev-${{ matrix.service }}
           image: ${{ steps.build-image.outputs.image }}
 
       - name: Deploy to ECS
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        if: matrix.enabled == 'true'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: ${{ env.ECS_SERVICE }}
+          service: y-so-cereal-dev-${{ matrix.service }}-service
           cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: true  # 배포 완료까지 대기
-          codedeploy-appspec: ""
+          wait-for-service-stability: true

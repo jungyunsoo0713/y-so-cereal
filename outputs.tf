@@ -4,7 +4,7 @@ output "vpc_id" {
 }
 
 output "alb_dns_name" {
-  description = "ALB DNS name for the ECS service"
+  description = "ALB DNS name (entry point for all services)"
   value       = module.ecs.alb_dns_name
 }
 
@@ -13,9 +13,14 @@ output "ecs_cluster_name" {
   value       = module.ecs.cluster_name
 }
 
-output "ecs_service_name" {
-  description = "ECS service name"
-  value       = module.ecs.service_name
+output "ecs_service_names" {
+  description = "ECS service names per microservice"
+  value       = module.ecs.service_names
+}
+
+output "ecr_repository_urls" {
+  description = "ECR repository URLs per microservice"
+  value       = module.ecs.ecr_repository_urls
 }
 
 output "github_actions_role_arn" {

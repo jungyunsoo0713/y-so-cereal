@@ -23,23 +23,27 @@ variable "private_subnets" {
 }
 
 variable "container_port" {
-  type = number
+  description = "Port exposed by all containers"
+  type        = number
+  default     = 8080
 }
 
 variable "container_cpu" {
-  type = number
+  description = "CPU units per task"
+  type        = number
+  default     = 256
 }
 
 variable "container_memory" {
-  type = number
+  description = "Memory in MiB per task"
+  type        = number
+  default     = 512
 }
 
 variable "desired_count" {
-  type = number
-}
-
-variable "container_image" {
-  type = string
+  description = "Desired number of tasks per service"
+  type        = number
+  default     = 1
 }
 
 variable "task_role_arn" {
@@ -48,4 +52,10 @@ variable "task_role_arn" {
 
 variable "execution_role_arn" {
   type = string
+}
+
+variable "services" {
+  description = "List of microservice names to deploy"
+  type        = list(string)
+  default     = ["cart", "catalog", "checkout", "orders", "ui"]
 }

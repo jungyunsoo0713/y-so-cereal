@@ -66,11 +66,6 @@ variable "desired_count" {
   default     = 1
 }
 
-variable "container_image" {
-  description = "Docker image URI for ECS task"
-  type        = string
-  default     = "nginx:latest"
-}
 
 # GitHub OIDC
 variable "github_org" {

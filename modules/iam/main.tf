@@ -30,8 +30,8 @@ resource "aws_iam_role" "github_actions" {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           }
           StringLike = {
-            # main 브랜치에서만 assume 가능하도록 제한
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:ref:refs/heads/main"
+            # 해당 레포의 모든 브랜치/PR에서 assume 가능 (브랜치별 제한은 워크플로우에서 관리)
+            "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:*"
           }
         }
       }
