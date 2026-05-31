@@ -1,0 +1,121 @@
+name: Deploy Service
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: "ap-northeast-2"
+
+jobs:
+  deploy:
+    name: ${{ inputs.service }} → ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment == 'prod' && 'production' || 'dev' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.environment == 'prod' && secrets.AWS_ROLE_ARN_PROD || secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-Deploy-${{ inputs.service }}-${{ inputs.environment }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            -t $ECR_REGISTRY/y-so-cereal-${{ inputs.environment }}-${{ inputs.service }}:${IMAGE_TAG} \
+            -t $ECR_REGISTRY/y-so-cereal-${{ inputs.environment }}-${{ inputs.service }}:latest \
+            src/${{ inputs.service }}
+          docker push $ECR_REGISTRY/y-so-cereal-${{ inputs.environment }}-${{ inputs.service }}:${IMAGE_TAG}
+          docker push $ECR_REGISTRY/y-so-cereal-${{ inputs.environment }}-${{ inputs.service }}:latest
+          echo "image=$ECR_REGISTRY/y-so-cereal-${{ inputs.environment }}-${{ inputs.service }}:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+
+      # ECR 이미지 취약점 스캔 게이트
+      - name: Wait for ECR scan results
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          echo "Waiting for ECR scan to complete..."
+          for i in $(seq 1 20); do
+            STATUS=$(aws ecr describe-image-scan-findings \
+              --repository-name y-so-cereal-${{ inputs.environment }}-${{ inputs.service }} \
+              --image-id imageTag=${IMAGE_TAG} \
+              --region ${{ env.AWS_REGION }} \
+              --query 'imageScanStatus.status' \
+              --output text 2>/dev/null || echo "IN_PROGRESS")
+            echo "Scan status: ${STATUS} (attempt ${i}/20)"
+            if [ "$STATUS" = "COMPLETE" ]; then
+              break
+            fi
+            sleep 15
+          done
+
+      - name: Check ECR scan results - block on CRITICAL/HIGH
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          FINDINGS=$(aws ecr describe-image-scan-findings \
+            --repository-name y-so-cereal-${{ inputs.environment }}-${{ inputs.service }} \
+            --image-id imageTag=${IMAGE_TAG} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'imageScanFindings.findingSeverityCounts' \
+            --output json)
+
+          echo "Scan findings: ${FINDINGS}"
+
+          CRITICAL=$(echo $FINDINGS | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('CRITICAL', 0))")
+          HIGH=$(echo $FINDINGS | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('HIGH', 0))")
+
+          echo "CRITICAL: ${CRITICAL}, HIGH: ${HIGH}"
+
+          if [ "$CRITICAL" -gt "0" ] || [ "$HIGH" -gt "0" ]; then
+            echo "❌ Blocked: ${CRITICAL} CRITICAL, ${HIGH} HIGH vulnerabilities in ${{ inputs.service }}"
+            exit 1
+          fi
+
+          echo "✅ No CRITICAL/HIGH vulnerabilities. Proceeding."
+
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition y-so-cereal-${{ inputs.environment }}-${{ inputs.service }} \
+            --query taskDefinition \
+            > task-definition.json
+
+      - name: Update ECS task definition with new image
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: y-so-cereal-${{ inputs.environment }}-${{ inputs.service }}
+          image: ${{ steps.build-image.outputs.image }}
+
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: y-so-cereal-${{ inputs.environment }}-${{ inputs.service }}-service
+          cluster: y-so-cereal-${{ inputs.environment }}-cluster
+          wait-for-service-stability: true
