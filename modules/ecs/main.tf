@@ -1,5 +1,14 @@
 locals {
   services = toset(var.services)
+
+  # 서비스별 헬스체크 경로
+  health_check_paths = {
+    cart     = "/actuator/health"
+    catalog  = "/health"
+    checkout = "/health"
+    orders   = "/actuator/health"
+    ui       = "/actuator/health"
+  }
 }
 
 # ECR Repository - 서비스별
@@ -200,11 +209,11 @@ resource "aws_lb_target_group" "services" {
   health_check {
     enabled             = true
     healthy_threshold   = 2
-    unhealthy_threshold = 3
-    timeout             = 5
-    interval            = 30
-    path                = "/actuator/health"
-    matcher             = "200-404" # 서비스마다 health endpoint 다를 수 있어서 넓게 허용
+    unhealthy_threshold = 5
+    timeout             = 10
+    interval            = 60
+    path                = lookup(local.health_check_paths, each.key, "/health")
+    matcher             = "200-404"
   }
 
   tags = {

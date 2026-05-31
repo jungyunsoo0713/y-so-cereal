@@ -39,3 +39,4 @@ COPY --chown=node:node --from=build /usr/src/app/dist ./dist
 
 ENTRYPOINT [ "node", "dist/main.js" ]# deploy trigger
 # redeploy
+# redeploy v2
