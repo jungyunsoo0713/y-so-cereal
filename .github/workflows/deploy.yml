@@ -2,7 +2,9 @@ name: Deploy to ECS
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main    # dev 배포
+      - prod    # prod 배포
     paths:
       - "src/**"
 
@@ -12,18 +14,18 @@ permissions:
 
 env:
   AWS_REGION: "ap-northeast-2"
-  ECS_CLUSTER: "y-so-cereal-dev-cluster"
 
 jobs:
   changes:
     name: Detect changed services
     runs-on: ubuntu-latest
     outputs:
-      cart:     ${{ steps.filter.outputs.cart }}
-      catalog:  ${{ steps.filter.outputs.catalog }}
-      checkout: ${{ steps.filter.outputs.checkout }}
-      orders:   ${{ steps.filter.outputs.orders }}
-      ui:       ${{ steps.filter.outputs.ui }}
+      cart:        ${{ steps.filter.outputs.cart }}
+      catalog:     ${{ steps.filter.outputs.catalog }}
+      checkout:    ${{ steps.filter.outputs.checkout }}
+      orders:      ${{ steps.filter.outputs.orders }}
+      ui:          ${{ steps.filter.outputs.ui }}
+      environment: ${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -42,10 +44,10 @@ jobs:
               - 'src/ui/**'
 
   deploy:
-    name: Build & Deploy - ${{ matrix.service }}
+    name: Build & Deploy - ${{ matrix.service }} (${{ needs.changes.outputs.environment }})
     runs-on: ubuntu-latest
     needs: changes
-    environment: production
+    environment: ${{ needs.changes.outputs.environment == 'prod' && 'production' || 'dev' }}
 
     strategy:
       fail-fast: false
@@ -78,13 +80,21 @@ jobs:
         if: matrix.enabled == 'true'
         uses: actions/checkout@v4
 
+      - name: Set environment variables
+        if: matrix.enabled == 'true'
+        run: |
+          ENV=${{ needs.changes.outputs.environment }}
+          echo "ENV=${ENV}" >> $GITHUB_ENV
+          echo "ECS_CLUSTER=y-so-cereal-${ENV}-cluster" >> $GITHUB_ENV
+          echo "ROLE_ARN=${{ needs.changes.outputs.environment == 'prod' && secrets.AWS_ROLE_ARN_PROD || secrets.AWS_ROLE_ARN }}" >> $GITHUB_ENV
+
       - name: Configure AWS credentials via OIDC
         if: matrix.enabled == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ env.ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: GitHubActions-Deploy-${{ matrix.service }}
+          role-session-name: GitHubActions-Deploy-${{ matrix.service }}-${{ env.ENV }}
 
       - name: Login to Amazon ECR
         if: matrix.enabled == 'true'
@@ -100,28 +110,24 @@ jobs:
           SERVICE: ${{ matrix.service }}
         run: |
           docker build \
-            -t $ECR_REGISTRY/y-so-cereal-dev-${SERVICE}:${IMAGE_TAG} \
-            -t $ECR_REGISTRY/y-so-cereal-dev-${SERVICE}:latest \
+            -t $ECR_REGISTRY/y-so-cereal-${ENV}-${SERVICE}:${IMAGE_TAG} \
+            -t $ECR_REGISTRY/y-so-cereal-${ENV}-${SERVICE}:latest \
             src/${SERVICE}
-          docker push $ECR_REGISTRY/y-so-cereal-dev-${SERVICE}:${IMAGE_TAG}
-          docker push $ECR_REGISTRY/y-so-cereal-dev-${SERVICE}:latest
-          echo "image=$ECR_REGISTRY/y-so-cereal-dev-${SERVICE}:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          docker push $ECR_REGISTRY/y-so-cereal-${ENV}-${SERVICE}:${IMAGE_TAG}
+          docker push $ECR_REGISTRY/y-so-cereal-${ENV}-${SERVICE}:latest
+          echo "image=$ECR_REGISTRY/y-so-cereal-${ENV}-${SERVICE}:${IMAGE_TAG}" >> $GITHUB_OUTPUT
 
-      # ---------------------------------------------------------------
       # ECR 이미지 취약점 스캔 게이트
-      # CRITICAL 또는 HIGH 취약점 발견 시 배포 차단
-      # ---------------------------------------------------------------
       - name: Wait for ECR scan results
         if: matrix.enabled == 'true'
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
           SERVICE: ${{ matrix.service }}
         run: |
           echo "Waiting for ECR scan to complete for ${SERVICE}:${IMAGE_TAG}..."
           for i in $(seq 1 20); do
             STATUS=$(aws ecr describe-image-scan-findings \
-              --repository-name y-so-cereal-dev-${SERVICE} \
+              --repository-name y-so-cereal-${ENV}-${SERVICE} \
               --image-id imageTag=${IMAGE_TAG} \
               --region ${{ env.AWS_REGION }} \
               --query 'imageScanStatus.status' \
@@ -140,7 +146,7 @@ jobs:
           SERVICE: ${{ matrix.service }}
         run: |
           FINDINGS=$(aws ecr describe-image-scan-findings \
-            --repository-name y-so-cereal-dev-${SERVICE} \
+            --repository-name y-so-cereal-${ENV}-${SERVICE} \
             --image-id imageTag=${IMAGE_TAG} \
             --region ${{ env.AWS_REGION }} \
             --query 'imageScanFindings.findingSeverityCounts' \
@@ -158,18 +164,15 @@ jobs:
             exit 1
           fi
 
-          echo "✅ No CRITICAL or HIGH vulnerabilities found in ${SERVICE}. Proceeding with deployment."
+          echo "✅ No CRITICAL or HIGH vulnerabilities found in ${SERVICE}. Proceeding."
 
-      # ---------------------------------------------------------------
-      # ECS 배포
-      # ---------------------------------------------------------------
       - name: Download current task definition
         if: matrix.enabled == 'true'
         env:
           SERVICE: ${{ matrix.service }}
         run: |
           aws ecs describe-task-definition \
-            --task-definition y-so-cereal-dev-${SERVICE} \
+            --task-definition y-so-cereal-${ENV}-${SERVICE} \
             --query taskDefinition \
             > task-definition.json
 
@@ -179,7 +182,7 @@ jobs:
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: task-definition.json
-          container-name: y-so-cereal-dev-${{ matrix.service }}
+          container-name: y-so-cereal-${{ env.ENV }}-${{ matrix.service }}
           image: ${{ steps.build-image.outputs.image }}
 
       - name: Deploy to ECS
@@ -187,6 +190,6 @@ jobs:
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: y-so-cereal-dev-${{ matrix.service }}-service
+          service: y-so-cereal-${{ env.ENV }}-${{ matrix.service }}-service
           cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: true
